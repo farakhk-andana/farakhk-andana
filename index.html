@@ -1055,15 +1055,30 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
                     created_at: firebase.firestore.FieldValue.serverTimestamp()
                 };
                 let notesSaved = true;
+                // الطلب + خصم المخزون في عملية واحدة (batch): لو حد سبقك على آخر قطعة الطلب كله بيفشل
+                const placeOrder = async (extra) => {
+                    const ref = db.collection('orders').doc();
+                    const batch = db.batch();
+                    const need = {};
+                    orderItems.forEach(it => {
+                        const pr = products.find(x => x.id === it.productId);
+                        if(pr && stockOf(pr) !== null) need[it.productId] = (need[it.productId] || 0) + unitsOf(pr, it.weight, it.quantity);
+                    });
+                    const pids = Object.keys(need);
+                    const data = { ...orderDoc, ...extra };
+                    if(pids.length) data.stock_deducted = true;
+                    batch.set(ref, data);
+                    pids.forEach(pid => batch.update(db.collection('products').doc(pid), { stock: firebase.firestore.FieldValue.increment(-need[pid]), last_order: ref.id }));
+                    await batch.commit();
+                };
                 if(notes) {
-                    try { await db.collection('orders').add({ ...orderDoc, notes }); }
+                    try { await placeOrder({ notes }); }
                     catch(e1) {
-                        // لو قواعد Firestore لسه مش مسموحة بحقل الملاحظات: ابعت الطلب من غيرها بدل ما يفشل
-                        if(e1 && e1.code === 'permission-denied') { notesSaved = false; await db.collection('orders').add(orderDoc); }
+                        if(e1 && e1.code === 'permission-denied') { notesSaved = false; await placeOrder({}); }
                         else throw e1;
                     }
                 } else {
-                    await db.collection('orders').add(orderDoc);
+                    await placeOrder({});
                 }
 
                 notifyAdmin(orderCode, finalTotal);
@@ -1083,7 +1098,7 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
                         at: firebase.firestore.FieldValue.serverTimestamp()
                     }).catch(() => {});
                 }
-                appAlert('❌ تعذر إرسال الطلب، تأكد من البيانات وحاول مرة أخرى\n(' + ((e && (e.code || e.message)) || 'خطأ') + ')');
+                appAlert((e && e.code === 'permission-denied' ? '❌ ممكن الكمية خلصت أو اتغيرت. حدّث الصفحة وحاول تاني.' : '❌ تعذر إرسال الطلب، تأكد من البيانات وحاول مرة أخرى') + '\n(' + ((e && (e.code || e.message)) || 'خطأ') + ')');
             } finally {
                 resetBtn();
             }
@@ -1154,11 +1169,19 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
             const ok = await appConfirm('هل تريد إلغاء الطلب ' + code + ' ؟', 'نعم، إلغاء الطلب');
             if(!ok) return;
             try {
-                await db.collection('orders').doc(docId).update({
-                    status: 'ملغي',
-                    cancelled_by: 'customer',
-                    cancelled_at: firebase.firestore.FieldValue.serverTimestamp()
-                });
+                const cb = db.batch();
+                const upd = { status: 'ملغي', cancelled_by: 'customer', cancelled_at: firebase.firestore.FieldValue.serverTimestamp() };
+                const back = {};
+                if(cur && cur.stock_deducted === true) {
+                    (cur.items || []).forEach(it => {
+                        const pr = products.find(x => x.id === it.productId);
+                        if(pr && stockOf(pr) !== null) back[it.productId] = (back[it.productId] || 0) + unitsOf(pr, it.weight, it.quantity);
+                    });
+                    upd.stock_deducted = false;
+                }
+                cb.update(db.collection('orders').doc(docId), upd);
+                Object.keys(back).forEach(pid => cb.update(db.collection('products').doc(pid), { stock: firebase.firestore.FieldValue.increment(back[pid]), last_order: docId }));
+                await cb.commit();
                 notifyAdmin(code, total, 'cancel');
                 appAlert('تم إلغاء طلبك ✅');
             } catch(e) {
