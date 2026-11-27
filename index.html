@@ -293,6 +293,7 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
         <div class="splash-title" id="splash-store-name">فراخك عندنا</div>
         <div class="splash-loader"></div>
     </div>
+    <div id="closedBar" style="display:none;background:#b71c1c;color:#fff;text-align:center;padding:10px 12px;font-weight:bold;font-size:15px;line-height:1.7;position:relative;z-index:99990"></div>
     <div id="maintenance-screen">
         <i class="fas fa-tools"></i>
         <h2>المتجر مغلق مؤقتاً للصيانة</h2>
@@ -574,6 +575,7 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
                 if(doc.exists) {
                     settings = doc.data();
                     handleMaintenanceState();
+                    tickClosedBar();
                     applySettings();
                     renderCategories();
                 }
@@ -967,7 +969,29 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
         }
 
         // ============ ORDER FORM ============
+        // ===== إغلاق المتجر بعدّ تنازلي =====
+        function closedUntilMs() { const v = settings && Number(settings.closedUntil); return v > 0 ? v : 0; }
+        function isAdminUser() { const u = auth && auth.currentUser; return !!u && u.uid === 'fI3bLMOP3TOEmE1MUpbz6MtTQFZ2' && !u.isAnonymous; }
+        function isStoreClosedRaw() { return closedUntilMs() > Date.now(); }
+        function isStoreClosed() { return isStoreClosedRaw() && !isAdminUser(); }
+        function fmtLeft(ms) {
+            const s = Math.max(0, Math.floor(ms / 1000)), d = Math.floor(s / 86400), h = Math.floor(s % 86400 / 3600), m = Math.floor(s % 3600 / 60), x = s % 60;
+            const p = n => String(n).padStart(2, '0');
+            return (d ? d + ' يوم ' : '') + p(h) + ':' + p(m) + ':' + p(x);
+        }
+        function tickClosedBar() {
+            const bar = document.getElementById('closedBar'); if(!bar) return;
+            if(isStoreClosedRaw()) {
+                const until = new Date(closedUntilMs());
+                bar.style.display = 'block';
+                bar.innerHTML = (isAdminUser() ? '👑 أنت أدمن: المتجر مفتوح ليك والطلب شغال. ' : '') + '🔒 المتجر مغلق للعملاء، نستقبل الطلبات بعد: <span dir="ltr" style="background:#fff;color:#b71c1c;border-radius:6px;padding:2px 8px;margin:0 4px">' + fmtLeft(closedUntilMs() - Date.now()) + '</span><br><span style="font-size:12px;font-weight:normal">يفتح ' + until.toLocaleString('ar-EG', { weekday: 'long', hour: 'numeric', minute: '2-digit' }) + '</span>';
+            } else bar.style.display = 'none';
+        }
+        setInterval(tickClosedBar, 1000);
+        function storeClosedAlert() { appAlert('🔒 المتجر مغلق حالياً. نفتح بعد ' + fmtLeft(closedUntilMs() - Date.now()) + '. تقدر تتصفح المنتجات.'); }
+
         function openOrderForm() {
+            if(isStoreClosed()) { storeClosedAlert(); return; }
             // إعادة تعيين الحقول
             document.getElementById('custGovernorate').value = '';
             document.getElementById('custCity').innerHTML = '<option value="">-- اختر المدينة --</option>';
@@ -983,6 +1007,7 @@ window.OneSignalDeferred = window.OneSignalDeferred || [];
         function closeOrderForm() { document.getElementById('orderModal').style.display = 'none'; }
 
         async function submitOrder() {
+            if(isStoreClosed()) { storeClosedAlert(); return; }
             if(!requireCustomerLogin()) return;
             if(!currentProduct && !cartMode) { appAlert('حدث خطأ'); closeOrderForm(); return; }
             
@@ -1323,6 +1348,7 @@ function updateCartBadge() { const b = document.getElementById('cartBadge'); if 
 
 // ---------- السلة ----------
 function addToCart() {
+    if (isStoreClosed()) { storeClosedAlert(); return; }
     const p = currentProduct; if (!p) return;
     if (!isPiece(p) && (!(selectedWeight >= 0.1) || selectedWeight > 50)) return appAlert('الوزن لازم يكون بين 0.1 و 50 كيلو');
     const s = stockOf(p), u = unitsOf(p, selectedWeight, selectedQuantity);
